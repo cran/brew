@@ -22,20 +22,77 @@ BRCODE <- 2
 BRCOMMENT <- 3
 BRCATCODE <- 4
 BRTEMPLATE <- 5
+DELIM <- list()
+DELIM[[BRTEXT]] <- c('','')
+DELIM[[BRCODE]] <- c('<%','%>')
+DELIM[[BRCOMMENT]] <- c('<%#','%>')
+DELIM[[BRCATCODE]] <- c('<%=','%>')
+DELIM[[BRTEMPLATE]] <- c('<%%','%%>')
+
+.bufLen <- 0
+.cache <- NULL
+
+setBufLen <- function(len=0){
+	unlockBinding('.bufLen',environment(setBufLen))
+	.bufLen <<- len
+	lockBinding('.bufLen',environment(setBufLen))
+	invisible(NULL)
+}
+
+brewCache     <- function(envir=NULL) {
+	if (missing(envir)) return(.cache)
+	unlockBinding('.cache',environment(brewCache))
+	.cache <<- envir
+	lockBinding('.cache',environment(brewCache))
+	invisible(NULL)
+}
+brewCacheOn  <- function() brewCache(new.env(hash=TRUE,parent=globalenv()))
+brewCacheOff <- function() brewCache(NULL)
+
+# text and code should be found by lexical scoping rules
+`.brew.cached` <- function(output=stdout(),envir=parent.frame()){
+	# Only sink if caller passed an argument
+	sunk <- FALSE
+	if (!missing(output)) {
+		sunk <- TRUE
+		sink(output)
+	}
+
+	# Set up text output closure
+	brew.cat <- function(from,to) cat(text[from:to],sep='',collapse='')
+	.prev.brew.cat <- NULL
+	if (exists('.brew.cat',envir=envir)){
+		.prev.brew.cat <- get('.brew.cat',pos=envir)
+	}
+	assign('.brew.cat',brew.cat, envir=envir)
+
+	ret <- try(eval(code,envir=envir))
+
+	# sink() will warn if trying to end the real stdout diversion
+	if (sunk && unclass(output) != 1) sink()
+
+	if(!is.null(.prev.brew.cat)){
+		assign('.brew.cat',.prev.brew.cat,envir=envir)
+	} else {
+		rm('.brew.cat',envir=envir)
+	}
+
+	invisible(ret)
+}
 
 `brew` <-
-function(file=stdin(),output=stdout(),text=NULL,envir=parent.frame(),run=TRUE){
+function(file=stdin(),output=stdout(),text=NULL,envir=parent.frame(),run=TRUE,parseCode=TRUE,tplParser=NULL){
+
+	file.mtime <- canCache <- isFile <- closeIcon <- FALSE
 
 	# Error check input
-	closeIcon <- FALSE
-	if (is.character(text) && nchar(text[1]) > 0){
+	if (is.character(file) && file.exists(file)){
+		isFile <- closeIcon <- TRUE
+	} else if (is.character(text) && nchar(text[1]) > 0){
 		closeIcon <- TRUE
 		icon <- textConnection(text[1])
 	} else if (inherits(file,'connection') && summary(file)$"can read" == 'yes') {
 		icon <- file
-	} else if (is.character(file) && file.exists(file)){
-		closeIcon <- TRUE
-		icon <- file(file,open="rt")
 	} else {
 		stop('No valid input')
 		return(invisible(NULL))
@@ -54,9 +111,31 @@ function(file=stdin(),output=stdout(),text=NULL,envir=parent.frame(),run=TRUE){
 		return(invisible(NULL))
 	}
 
-	newline <- FALSE
+	# Can we use the cache
+	if (!is.null(.cache) && isFile && run && is.null(tplParser)){
+		canCache <- TRUE
+		if (exists(file,.cache)){
+			file.cache <- get(file,.cache)
+			file.mtime <- file.info(file)$mtime
+			if (file.cache$mtime >= file.mtime){
+				brew.cached <- .brew.cached
+				environment(brew.cached) <- file.cache$env
+				if (!missing(output)) {
+					return(brew.cached(output,envir))
+				} else {
+					return(brew.cached(envir=envir))
+				}
+			}
+		}
+	}
+
+	# Not using cache, open input file if needed
+	if (isFile) icon <- file(file,open="rt")
+
 	state <- BRTEXT
-	buf <- code <- character()
+	text <- code <- tpl <- character(.bufLen)
+	textLen <- codeLen <- as.integer(0)
+	textStart <- as.integer(1)
 	line <- ''
 	
 	while(TRUE){
@@ -64,17 +143,9 @@ function(file=stdin(),output=stdout(),text=NULL,envir=parent.frame(),run=TRUE){
 			line <- readLines(icon,1)
 		   	if (length(line) != 1) break
 			line <- paste(line,"\n",sep='')
-			newline <- TRUE
-		} else newline <- FALSE
+		}
 		if (state == BRTEXT){
-			if (newline && regexpr("^%",line,perl=TRUE) > 0){
-				code[length(code)+1] <- paste("cat(",deparse(paste(buf,collapse='')),")")
-				spl <- strsplit(line,"^%",perl=TRUE)[[1]]
-				code[length(code)+1] <- spl[2]
-				line <- ''
-				buf <- character()
-				next
-			}
+
 			if (regexpr("<%=",line,perl=TRUE) > 0){
 				state <- BRCATCODE
 				delim <- "<%="
@@ -82,9 +153,16 @@ function(file=stdin(),output=stdout(),text=NULL,envir=parent.frame(),run=TRUE){
 				state <- BRCOMMENT
 				delim <- "<%#"
 			} else if (regexpr('<%%',line,perl=TRUE) > 0){
-				# Template generator, strip a %
+				# Template generator, strip a % unless tplParser != NULL
+				# so just take off the whole <%% stuff.
 				spl <- strsplit(line,'<%%',fixed=TRUE)[[1]]
-				buf[length(buf)+1] <- paste(spl[1],'<%',sep='')
+				if (!is.null(tplParser)){
+					text[textLen+1] <- spl[1]
+					textLen <- textLen + 1
+				} else {
+					text[textLen+1] <- paste(spl[1],'<%',sep='')
+					textLen <- textLen + 1
+				}
 				line <- paste(spl[-1],collapse='<%%')
 				state <- BRTEMPLATE
 				next
@@ -92,21 +170,45 @@ function(file=stdin(),output=stdout(),text=NULL,envir=parent.frame(),run=TRUE){
 				state <- BRCODE
 				delim <- "<%"
 			}
+
 			if (state != BRTEXT){ # something changed
 				spl <- strsplit(line,delim,fixed=TRUE)[[1]]
-				if (nchar(spl[1])) buf[length(buf)+1] <- spl[1]
+				if (nchar(spl[1])) {
+					text[textLen+1] <- spl[1]
+					textLen <- textLen + 1
+				}
 				line <- paste(spl[-1],collapse=delim)
 
-				if (length(buf)) code[length(code)+1] <- paste("cat(",deparse(paste(buf,collapse='')),")")
-				buf  <- character()
+				if (textStart <= textLen) {
+					code[codeLen+1] <- paste('.brew.cat(',textStart,',',textLen,')',sep='')
+					codeLen <- codeLen + 1
+					textStart <- textLen + 1
+				}
 			} else {
-				buf[length(buf)+1] <- line
+				text[textLen+1] <- line
+				textLen <- textLen + 1
 				line <- ''
 			}
 		} else {
 			if (regexpr("%%>",line,perl=TRUE) > 0){
+				if (state != BRTEMPLATE)
+					stop("Oops! Someone forgot to close a tag. We saw: ",DELIM[[state]][1],' and we need ',DELIM[[state]][2])
 				spl <- strsplit(line,"%%>",fixed=TRUE)[[1]]
-				buf[length(buf)+1] <- paste(spl[1],'%>',sep='')
+				if (!is.null(tplParser)){
+					tpl[length(tpl)+1] <- spl[1]
+					# call template parser
+					tplBufList <- tplParser(tpl)
+					if (length(tplBufList)){
+						textBegin <- textLen + 1;
+						textEnd <- textBegin + length(tplBufList) - 1
+						textLen <- textEnd
+						text[textBegin:textEnd] <- tplBufList
+					}
+					tpl <- character()
+				} else {
+					text[textLen+1] <- paste(spl[1],'%>',sep='')
+					textLen <- textLen + 1
+				}
 				line <- paste(spl[-1],collapse='%%>')
 				state <- BRTEXT
 				next
@@ -122,47 +224,72 @@ function(file=stdin(),output=stdout(),text=NULL,envir=parent.frame(),run=TRUE){
 						line <- substr(line,1,nchar(line)-1)
 						spl[1] <- substr(spl[1],1,n-1)
 					}
-					buf[length(buf)+1] <- spl[1]
+					text[textLen+1] <- spl[1]
+					textLen <- textLen + 1
 				}
+
+				# We've found the end of a brew section, but we only care if the
+				# section is a BRCODE or BRCATCODE. We just implicitly drop BRCOMMENT sections
 				if (state == BRCODE){
-					code[length(code)+1] <- paste(buf,collapse='')
+					code[codeLen+1] <- paste(text[textStart:textLen],collapse='')
+					codeLen <- codeLen + 1
 				} else if (state == BRCATCODE){
-					code[length(code)+1] <- paste("cat(",paste(buf,collapse=''),")")
+					code[codeLen+1] <- paste('cat(',paste(text[textStart:textLen],collapse=''),')',sep='')
+					codeLen <- codeLen + 1
 				}
-				buf <- character()
+				textStart <- textLen + 1
 				state <- BRTEXT
+			} else if (regexpr("<%",line,perl=TRUE) > 0){
+				stop("Oops! Someone forgot to close a tag. We saw: ",DELIM[[state]][1],' and we need ',DELIM[[state]][2])
 			} else {
-				buf[length(buf)+1] <- line
+				if (state == BRTEMPLATE && !is.null(tplParser))
+					tpl[length(tpl)+1] <- line
+				else {
+					text[textLen+1] <- line
+					textLen <- textLen + 1
+				}
 				line <- ''
 			}
 		}
 	}
 	if (state == BRTEXT){
-		if (length(buf)) {
-			code[length(code)+1] <- paste("cat(",deparse(paste(buf,collapse='')),")")
-			# cat(buf,sep='')
+		if (textStart <= textLen) {
+			code[codeLen+1] <- paste('.brew.cat(',textStart,',',textLen,')',sep='')
+			codeLen <- codeLen + 1
+			textStart <- textLen + 1
 		}
 	} else {
-		warning("Unclosed tag")
+		stop("Oops! Someone forgot to close a tag. We saw: ",DELIM[[state]][1],' and we need ',DELIM[[state]][2])
 	}
 
 	if (closeIcon) close(icon)
 
 	if (run){
-		sunk <- FALSE
-		if (!exists('.brew.output',where=envir) || !is.null(match.call()$output)) {
-			sunk <- TRUE
-			assign('.brew.output',output,pos=envir)
-			sink(output)
+
+		brew.env <- new.env(parent=globalenv())
+		assign('text',text,brew.env)
+		assign('code',parse(text=code,srcfile=NULL),brew.env)
+		brew.cached <- .brew.cached
+		environment(brew.cached) <- brew.env
+
+		if (canCache){
+			if (file.mtime == FALSE) file.mtime <- file.info(file)$mtime
+			assign(file,list(mtime=file.mtime,env=brew.env),.cache)
 		}
 
-		ret <- try(eval(parse(text=code),envir=envir))
-
-		# sink() will warn if trying to end the real stdout diversion
-		if (sunk && unclass(output) != 1) sink()
-		if (exists('.brew.output',where=envir)) rm('.brew.output',pos=envir)
-		invisible(ret)
+		if (!missing(output)) {
+			return(brew.cached(output,envir))
+		} else {
+			return(brew.cached(envir=envir))
+		}
+	} else if (parseCode){
+		brew.env <- new.env(parent=globalenv())
+		assign('text',text,brew.env)
+		assign('code',parse(text=code,srcfile=NULL),brew.env)
+		brew.cached <- .brew.cached
+		environment(brew.cached) <- brew.env
+		invisible(brew.cached)
 	} else {
-		invisible(parse(text=code))
+		invisible(list(text=text,code=code))
 	}
 }
