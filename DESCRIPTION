@@ -1,7 +1,7 @@
 Package: brew
 Type: Package
 Title: Templating Framework for Report Generation
-Version: 1.0-5
+Version: 1.0-6
 Date: 2010-09-30
 Author: Jeffrey Horner
 Maintainer: Jeffrey Horner <jeffrey.horner@gmail.com>
@@ -10,6 +10,6 @@ Description: brew implements a templating framework for mixing text and
         to PHP, Ruby's erb module, Java Server Pages, and Python's psp
         module.
 License: GPL-2
-Packaged: 2011-03-11 16:24:45 UTC; hornerj
+Packaged: 2011-04-13 14:36:39 UTC; hornerj
 Repository: CRAN
-Date/Publication: 2011-03-12 09:05:30
+Date/Publication: 2011-04-13 15:16:08
