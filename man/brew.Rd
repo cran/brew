@@ -7,7 +7,7 @@
 }
 \usage{
 brew(file=stdin(),output=stdout(),text=NULL,envir=parent.frame(),
-     run=TRUE,parseCode=TRUE,tplParser=NULL,chdir=FALSE)
+     run=TRUE,parseCode=TRUE,tplParser=NULL,chdir=FALSE, extendedErrorReport=FALSE)
 }
 \arguments{
   \item{file}{A connection, or a character string naming the file
@@ -29,6 +29,7 @@ brew(file=stdin(),output=stdout(),text=NULL,envir=parent.frame(),
   \item{chdir}{logical; if \code{TRUE} and \code{file} is a pathname, the R working
           directory is temporarily changed to the directory containing
           \code{file} for evaluating. \code{brew} will also honor the global option \code{brew.chdir}.}
+  \item{extendedErrorReport}{changes error handling behaviour to print a stack trace when an error occurs, the global option \code{brew.extended.error} can also be used to achive the same effect.  Existing brew behaviour is preserved if this switch is not set to TRUE.}
 }
 \details{
 	brew syntax is quite simple and there are very few delimiters to learn:
@@ -92,10 +93,17 @@ foo is still bar.
 
 ## A port of the Sweave test file.
 brew(system.file("brew-test-1.brew",package="brew"),"brew-test-1.tex",envir=new.env())
+##clean up generated files
+unlink("brew-test-1-1.eps")
+unlink("brew-test-1-2.eps")
+unlink("brew-test-1.tex")
 
 ## Everything you wanted to know about your R session.
 brew(system.file("brew-test-2.brew",package="brew"),"brew-test-2.html",envir=new.env())
 browseURL(paste('file://',file.path(getwd(),'brew-test-2.html'),sep=''))
+
+## clean up generated files
+unlink("brew-test-2.html")
 
 ## Don't sully up environment, so use envir=new.env(). Nested brew calls will still work.
 brew(system.file("example1.brew",package="brew"),envir=new.env())

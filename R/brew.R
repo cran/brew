@@ -2,6 +2,7 @@
 #  brew - text templating for R (www.r-project.org)
 #
 #  Copyright (C) 2007 Jeffrey Horner
+#  Portions Copyright (C) 2021 Greg Hunt
 #
 #  brew is free software; you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -31,6 +32,7 @@ DELIM[[BRTEMPLATE]] <- c('<%%','%%>')
 
 .bufLen <- 0
 .cache <- NULL
+.extendedError = NULL
 
 # Experimental function for setting the size of internal buffers.
 # There's anecdotal evidence that suggests larger buffer sizes
@@ -49,6 +51,40 @@ brewCacheOn  <- function() brewCache(new.env(hash=TRUE,parent=globalenv()))
 brewCacheOff <- function() brewCache(NULL)
 
 `.brew.cached` <- function(output=stdout(),envir=parent.frame()){
+  
+  # stack printing handler
+  tryWithStackTrace <- function(exp)
+  {
+    tryenv <- new.env()
+    assign("stackDepthAtEntry", value=length(sys.calls()), envir=tryenv)
+    out <- try(withCallingHandlers(exp, error=function(e)
+    {
+      stackDepthAtEntry = get("stackDepthAtEntry",envir=tryenv)
+      stack <- sys.calls()
+      stack <- head(stack, -2)
+      stack <- sapply(stack, deparse)
+      if(isTRUE(getOption("show.error.messages"))) 
+      {
+        message("Call stack at error:")
+        for(m in head(stack, stackDepthAtEntry-2))
+        {
+          message("\t",m)
+        }
+        message("\t ...")
+        for(m in tail(stack, (-1 * stackDepthAtEntry)-8))
+        {
+          message("\t",m)
+        }
+      }
+      assign("stack", value=paste(stack,collapse="\n"), envir=tryenv)
+    }), silent=!isTRUE(getOption("show.error.messages")))
+    if(inherits(out, "try-error")) out[2] <- tryenv$stack
+    out
+  }
+  
+  
+  
+  
 	# Only sink if caller passed an argument
 	sunk <- FALSE
 	if (!missing(output)) {
@@ -65,8 +101,14 @@ brewCacheOff <- function() brewCache(NULL)
 	assign('.brew.cat',brew.cat, envir=envir)
 
 	code <- get('code')
-	ret <- try(eval(code,envir=envir))
-
+	if(.extendedError || isTRUE(getOption('brew.extended.error')))
+	{
+	  ret <- tryWithStackTrace(eval(code,envir=envir))
+	}
+	else
+	{
+	  ret <- try(eval(code,envir=envir))
+	}
 	# sink() will warn if trying to end the real stdout diversion
 	if (sunk && unclass(output) != 1) sink()
 
@@ -80,7 +122,7 @@ brewCacheOff <- function() brewCache(NULL)
 }
 
 `brew` <-
-function(file=stdin(),output=stdout(),text=NULL,envir=parent.frame(),run=TRUE,parseCode=TRUE,tplParser=NULL,chdir=FALSE){
+function(file=stdin(),output=stdout(),text=NULL,envir=parent.frame(),run=TRUE,parseCode=TRUE,tplParser=NULL,chdir=FALSE, extendedErrorReport = FALSE){
 
 	file.mtime <- canCache <- isFile <- closeIcon <- FALSE
 	filekey <- file # we modify file when chdir=TRUE, so keep same cache key
@@ -278,6 +320,8 @@ function(file=stdin(),output=stdout(),text=NULL,envir=parent.frame(),run=TRUE,pa
 	if (run){
 
 		brew.env <- new.env(parent=globalenv())
+		assign(".extendedError",extendedErrorReport,brew.env)
+
 		assign('text',text,brew.env)
 		assign('code',parse(text=code,srcfile=NULL),brew.env)
 		brew.cached <- .brew.cached
