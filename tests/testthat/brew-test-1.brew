@@ -28,6 +28,7 @@ Now we look at Gaussian data:
 \begin{verbatim}
 <%
 library(stats)
+set.seed(42)
 x <- rnorm(20)
 print(x)
 print(t1 <- t.test(x))
@@ -53,7 +54,7 @@ don't look for it)}:
 <%
 	library(grDevices)
 	library(graphics)
-	postscript(file='brew-test-1-1.eps',
+	postscript(file=paste0(tempdir(),"/",'brew-test-1-3.eps'),
 		width=5,height=5,paper='special',horizontal=FALSE)
 	pairs(iris)
 	dev.off()
@@ -66,7 +67,7 @@ don't look for it)}:
 \end{figure}
 
 <%
-	postscript(file='brew-test-1-2.eps',
+	postscript(file=paste0(tempdir(),"/",'brew-test-1-4.eps'),
 		width=5,height=5,paper='special',horizontal=FALSE)
 	boxplot(Sepal.Length~Species, data=iris)
 	dev.off()

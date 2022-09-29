@@ -1,0 +1,13 @@
+<% 
+fna<-function()
+{
+  fnb()
+}
+
+fnb<-function()
+{
+  fnc() # error here
+}
+
+fna()
+%>

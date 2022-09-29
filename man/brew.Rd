@@ -38,7 +38,7 @@ brew(file=stdin(),output=stdout(),text=NULL,envir=parent.frame(),
 	\item{1.}{All text that falls outside of the delimiters is printed as-is.}
 	\item{2.}{R expressions between the '<\%' and '\%>' delimiters are executed in-place.}
     \item{3.}{The value of the R expression between the '<\%=' and '\%>' delimiters is printed.}
-	\item{4.}{All text between the '<\%\#' and '\%>' delimiters is thrown away. Use it as a comment.}
+	\item{4.}{All text between the '<\%#' and '\%>' delimiters is thrown away. Use it as a comment.}
 	\item{5.}{If you place a '-' just before the '\%>' delimiter, and it's placed at the end of a line, then the newline is omitted from the output.}
 	}
     
